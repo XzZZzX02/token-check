@@ -1,6 +1,6 @@
 ---
 name: tokencheck
-description: "Use when the user asks how to install, configure, run, troubleshoot, or integrate the tokencheck/tkc CLI for local Claude Code, Codex, OpenCode, and Pi token usage reports, snapshots, pricing, terminal charts, or Obsidian dashboards."
+description: "Use when the user asks how to install, configure, run, troubleshoot, or integrate the tokencheck/tkc CLI for local Claude Code, Codex, OpenCode, Pi, and Kimi Code token usage reports, snapshots, pricing, terminal charts, or Obsidian dashboards."
 ---
 
 # Tokencheck
@@ -77,6 +77,7 @@ tkc summary --source claude
 tkc models --source codex
 tkc days --source opencode
 tkc tools --source pi
+tkc summary --source kimi
 ```
 
 Date filters are inclusive and affect report commands only:
@@ -113,7 +114,7 @@ Blank input keeps and saves the current value. `none`, `null`, or `-` clears opt
 
 Important config fields:
 
-- `source`: default data source, one of `all`, `claude`, `codex`, `opencode`, or `pi`.
+- `source`: default data source, one of `all`, `claude`, `codex`, `opencode`, `pi`, or `kimi`.
 - `data_file`: default JSON snapshot path used by `fetch` and `--from-json`.
 - `pricing_file`: optional custom pricing JSON.
 - `obsidian_snapshot_file`: JSON snapshot path for Obsidian integration.
@@ -195,6 +196,7 @@ Common fixes:
 - Missing Codex data: confirm `$HOME/.codex/sessions` exists or pass `--home`.
 - Missing OpenCode data: confirm `$HOME/.local/share/opencode` exists or pass `--home`.
 - Missing Pi data: confirm `$HOME/.pi/agent/sessions` exists or pass `--home`.
+- Missing Kimi Code data: confirm `$HOME/.kimi-code/sessions` exists or pass `--home`.
 - No saved history: run `tkc fetch`.
 - Obsidian dashboard missing data: run `tkc obsidian --fetch`, then reopen or refresh the note.
 - JSON file is hidden in Obsidian: enable `Files and links -> Detect all file extensions`, or use the Dashboard Markdown instead of opening JSON directly.

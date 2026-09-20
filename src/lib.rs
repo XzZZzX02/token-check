@@ -4,6 +4,7 @@ pub mod billing;
 pub mod claude_code;
 pub mod codex;
 pub mod config;
+pub mod kimi_code;
 pub mod model;
 pub mod opencode;
 pub mod pi;
@@ -36,7 +37,7 @@ const OBSIDIAN_DASHBOARD_TEMPLATE: &str = include_str!("../assets/obsidian-dashb
 
 #[derive(Parser, Debug)]
 #[command(name = "tokencheck")]
-#[command(about = "Local Claude Code, Codex, OpenCode, and Pi usage stats")]
+#[command(about = "Local Claude Code, Codex, OpenCode, Pi, and Kimi Code usage stats")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -150,6 +151,8 @@ enum SourceFilter {
     #[value(name = "opencode", alias = "open-code", alias = "oc")]
     OpenCode,
     Pi,
+    #[value(name = "kimi", alias = "kimi-code", alias = "kimicode", alias = "kc")]
+    KimiCode,
 }
 
 impl From<SourcePreference> for SourceFilter {
@@ -160,6 +163,7 @@ impl From<SourcePreference> for SourceFilter {
             SourcePreference::Codex => SourceFilter::Codex,
             SourcePreference::OpenCode => SourceFilter::OpenCode,
             SourcePreference::Pi => SourceFilter::Pi,
+            SourcePreference::KimiCode => SourceFilter::KimiCode,
         }
     }
 }
@@ -172,6 +176,7 @@ impl From<SourceFilter> for SourcePreference {
             SourceFilter::Codex => SourcePreference::Codex,
             SourceFilter::OpenCode => SourcePreference::OpenCode,
             SourceFilter::Pi => SourcePreference::Pi,
+            SourceFilter::KimiCode => SourcePreference::KimiCode,
         }
     }
 }
@@ -184,6 +189,7 @@ impl SourceFilter {
             SourceFilter::Codex => "codex",
             SourceFilter::OpenCode => "opencode",
             SourceFilter::Pi => "pi",
+            SourceFilter::KimiCode => "kimi",
         }
     }
 }
@@ -705,6 +711,14 @@ fn run_doctor(
             describe_path_status(&path, language),
         ));
     }
+    if source_filter_includes(filter, Source::KimiCode) {
+        let path = roots.kimi_sessions();
+        rows.push(doctor_row(
+            label_kimi_data_dir(language),
+            path.exists(),
+            describe_path_status(&path, language),
+        ));
+    }
 
     let mut snapshot_has_usage = false;
     if data_file.exists() {
@@ -805,6 +819,7 @@ fn source_filter_includes(filter: SourceFilter, source: Source) -> bool {
             | (SourceFilter::Codex, Source::Codex)
             | (SourceFilter::OpenCode, Source::OpenCode)
             | (SourceFilter::Pi, Source::Pi)
+            | (SourceFilter::KimiCode, Source::KimiCode)
     )
 }
 
@@ -889,7 +904,7 @@ fn prompt_language(current: Language) -> Result<Language> {
 fn prompt_source(language: Language, current: SourcePreference) -> Result<SourcePreference> {
     loop {
         let prompt = format!(
-            "{} [all/claude/codex/opencode/pi] ({}: {}): ",
+            "{} [all/claude/codex/opencode/pi/kimi] ({}: {}): ",
             label_config_source(language),
             label_current(language),
             current.as_str()
@@ -1010,6 +1025,9 @@ fn localized_warning(language: Language, warning: &str) -> String {
     if let Some(path) = warning.strip_prefix("Pi data directory not found: ") {
         return format!("未找到 Pi 数据目录: {path}");
     }
+    if let Some(path) = warning.strip_prefix("Kimi Code data directory not found: ") {
+        return format!("未找到 Kimi Code 数据目录: {path}");
+    }
     if let Some(err) = warning.strip_prefix("Failed to walk Claude Code data: ") {
         return format!("遍历 Claude Code 数据失败: {err}");
     }
@@ -1021,6 +1039,9 @@ fn localized_warning(language: Language, warning: &str) -> String {
     }
     if let Some(err) = warning.strip_prefix("Failed to walk Pi data: ") {
         return format!("遍历 Pi 数据失败: {err}");
+    }
+    if let Some(err) = warning.strip_prefix("Failed to walk Kimi Code data: ") {
+        return format!("遍历 Kimi Code 数据失败: {err}");
     }
     if let Some(err) = warning.strip_prefix("Failed to walk OpenCode session data: ") {
         return format!("遍历 OpenCode 会话数据失败: {err}");
@@ -1042,6 +1063,9 @@ fn localized_warning(language: Language, warning: &str) -> String {
     }
     if let Some(rest) = warning.strip_prefix("Failed to read Pi file ") {
         return format!("读取 Pi 文件失败: {rest}");
+    }
+    if let Some(rest) = warning.strip_prefix("Failed to read Kimi Code file ") {
+        return format!("读取 Kimi Code 文件失败: {rest}");
     }
     if let Some(rest) = warning.strip_prefix("Invalid JSON in ") {
         return format!("无效 JSON: {rest}");
@@ -1202,6 +1226,10 @@ fn label_pi_data_dir(language: Language) -> &'static str {
     text(language, "Pi data directory", "Pi 数据目录")
 }
 
+fn label_kimi_data_dir(language: Language) -> &'static str {
+    text(language, "Kimi Code data directory", "Kimi Code 数据目录")
+}
+
 fn label_snapshot_file(language: Language) -> &'static str {
     text(language, "Snapshot file", "快照文件")
 }
@@ -1245,8 +1273,8 @@ fn label_invalid_language(language: Language) -> &'static str {
 fn label_invalid_source(language: Language) -> &'static str {
     text(
         language,
-        "Invalid source. Use all, claude, codex, opencode, or pi.",
-        "无效数据来源。请输入 all、claude、codex、opencode 或 pi。",
+        "Invalid source. Use all, claude, codex, opencode, pi, or kimi.",
+        "无效数据来源。请输入 all、claude、codex、opencode、pi 或 kimi。",
     )
 }
 
@@ -1444,6 +1472,9 @@ fn collect_data(filter: SourceFilter, roots: &Roots) -> Result<ReportData> {
     if matches!(filter, SourceFilter::All | SourceFilter::Pi) {
         data.merge(pi::collect(&roots.pi_sessions())?);
     }
+    if matches!(filter, SourceFilter::All | SourceFilter::KimiCode) {
+        data.merge(kimi_code::collect(&roots.kimi_sessions())?);
+    }
     Ok(data)
 }
 
@@ -1570,6 +1601,7 @@ fn source_matches(source: Source, filter: SourceFilter) -> bool {
             | (Source::Codex, SourceFilter::Codex)
             | (Source::OpenCode, SourceFilter::OpenCode)
             | (Source::Pi, SourceFilter::Pi)
+            | (Source::KimiCode, SourceFilter::KimiCode)
     )
 }
 
@@ -1598,7 +1630,13 @@ impl From<&ReportData> for DataCounts {
 
 fn print_summary(data: &ReportData, language: Language, pricing: &billing::Pricing) {
     let mut rows = Vec::new();
-    let sources = [Source::Claude, Source::Codex, Source::OpenCode, Source::Pi];
+    let sources = [
+        Source::Claude,
+        Source::Codex,
+        Source::OpenCode,
+        Source::Pi,
+        Source::KimiCode,
+    ];
     for source in sources {
         let session_count = unique_sessions(data, Some(source));
         let usage_events = data
@@ -2537,6 +2575,13 @@ mod tests {
         ));
         assert!(source_filter_includes(SourceFilter::Pi, Source::Pi));
         assert!(!source_filter_includes(SourceFilter::Pi, Source::OpenCode));
+        assert!(source_filter_includes(
+            SourceFilter::KimiCode,
+            Source::KimiCode
+        ));
+        assert!(source_filter_includes(SourceFilter::All, Source::KimiCode));
+        assert!(!source_filter_includes(SourceFilter::KimiCode, Source::Pi));
+        assert!(!source_filter_includes(SourceFilter::Pi, Source::KimiCode));
     }
 
     #[test]

@@ -276,6 +276,7 @@ fn usage_accounting(event: &UsageEvent) -> UsageAccounting {
         Source::Codex => UsageAccounting::CachedInputSeparate,
         Source::OpenCode => UsageAccounting::CachedInputSeparate,
         Source::Pi => UsageAccounting::CachedInputSeparate,
+        Source::KimiCode => UsageAccounting::CachedInputSeparate,
     }
 }
 

@@ -9,6 +9,8 @@ pub enum Source {
     Codex,
     OpenCode,
     Pi,
+    #[serde(rename = "kimi")]
+    KimiCode,
 }
 
 impl Source {
@@ -18,6 +20,7 @@ impl Source {
             Source::Codex => "codex",
             Source::OpenCode => "opencode",
             Source::Pi => "pi",
+            Source::KimiCode => "kimi",
         }
     }
 }
@@ -134,6 +137,10 @@ impl Roots {
     pub fn pi_sessions(&self) -> PathBuf {
         self.home.join(".pi").join("agent").join("sessions")
     }
+
+    pub fn kimi_sessions(&self) -> PathBuf {
+        self.home.join(".kimi-code").join("sessions")
+    }
 }
 
 pub type UsageMap<K> = BTreeMap<K, Usage>;
@@ -155,6 +162,34 @@ mod tests {
         // Then
         assert_eq!(label, "pi");
         assert_eq!(serialized, r#""pi""#);
+    }
+
+    #[test]
+    fn labels_kimi_source_for_reports_and_snapshots() {
+        // Given
+        let source = Source::KimiCode;
+
+        // When
+        let label = source.label();
+        let serialized = serde_json::to_string(&source).unwrap();
+
+        // Then
+        assert_eq!(label, "kimi");
+        assert_eq!(serialized, r#""kimi""#);
+    }
+
+    #[test]
+    fn resolves_kimi_sessions_under_kimi_code_data_directory() {
+        // Given
+        let roots = Roots {
+            home: PathBuf::from("/tmp/user"),
+        };
+
+        // When
+        let sessions = roots.kimi_sessions();
+
+        // Then
+        assert_eq!(sessions, PathBuf::from("/tmp/user/.kimi-code/sessions"));
     }
 
     #[test]

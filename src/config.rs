@@ -90,6 +90,8 @@ pub enum SourcePreference {
     Codex,
     OpenCode,
     Pi,
+    #[serde(rename = "kimi")]
+    KimiCode,
 }
 
 impl SourcePreference {
@@ -100,6 +102,7 @@ impl SourcePreference {
             SourcePreference::Codex => "codex",
             SourcePreference::OpenCode => "opencode",
             SourcePreference::Pi => "pi",
+            SourcePreference::KimiCode => "kimi",
         }
     }
 
@@ -110,6 +113,7 @@ impl SourcePreference {
             "codex" | "x" => Some(SourcePreference::Codex),
             "opencode" | "open-code" | "oc" | "o" => Some(SourcePreference::OpenCode),
             "pi" | "p" => Some(SourcePreference::Pi),
+            "kimi" | "kimicode" | "kimi-code" | "kc" => Some(SourcePreference::KimiCode),
             _ => None,
         }
     }
@@ -253,6 +257,22 @@ mod tests {
             Some(SourcePreference::OpenCode)
         );
         assert_eq!(SourcePreference::parse("pi"), Some(SourcePreference::Pi));
+        assert_eq!(
+            SourcePreference::parse("kimi"),
+            Some(SourcePreference::KimiCode)
+        );
+        assert_eq!(
+            SourcePreference::parse("kimi-code"),
+            Some(SourcePreference::KimiCode)
+        );
+        assert_eq!(
+            SourcePreference::parse("kimicode"),
+            Some(SourcePreference::KimiCode)
+        );
+        assert_eq!(
+            SourcePreference::parse("kc"),
+            Some(SourcePreference::KimiCode)
+        );
         assert_eq!(SourcePreference::parse("bad"), None);
     }
 
