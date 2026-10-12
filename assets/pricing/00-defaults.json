@@ -1,0 +1,17 @@
+{
+  "schema": 2,
+  "name": "defaults",
+  "description": "Shared accounting defaults. Cached input is reported as a separate counter by every supported source; legacy Codex sessions that only emit one cumulative event are detected and billed as a cached-input subset.",
+  "accounting": {
+    "default": "cached_input_separate",
+    "by_source": {
+      "claude": "cached_input_separate",
+      "codex": "cached_input_separate",
+      "opencode": "cached_input_separate",
+      "pi": "cached_input_separate",
+      "kimi": "cached_input_separate"
+    },
+    "legacy_codex_event_subset": true
+  },
+  "models": {}
+}

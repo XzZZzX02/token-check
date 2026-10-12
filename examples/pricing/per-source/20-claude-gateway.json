@@ -1,0 +1,20 @@
+{
+  "schema": 2,
+  "name": "claude-gateway",
+  "description": "Usage collected from Claude Code goes through a gateway that bills GPT models at a markup, so the same model id costs more on the claude source than on the others.",
+  "sources": ["claude"],
+  "models": {
+    "gpt-5.6": {
+      "input": 6.0,
+      "cached_input": 0.6,
+      "output": 30.0,
+      "note": "gateway list price, invoiced monthly"
+    },
+    "gpt-6-astra": {
+      "input": 15.0,
+      "cached_input": 1.5,
+      "output": 75.0,
+      "note": "gateway list price, invoiced monthly"
+    }
+  }
+}

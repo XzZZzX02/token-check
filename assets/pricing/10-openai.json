@@ -1,0 +1,303 @@
+{
+  "schema": 2,
+  "name": "openai",
+  "description": "OpenAI GPT and o series list prices in USD per 1M tokens, Standard tier. `cached_input` is the cached-input price, `output` also pays for reasoning tokens. GPT-5.6/GPT-6 prompts above 272k tokens switch to the documented high-context band (2x input, 1.5x output).",
+  "models": {
+    "gpt-6-astra": {
+      "input": 10.0,
+      "cached_input": 1.0,
+      "cache_creation_5m": 12.5,
+      "output": 50.0,
+      "tiers": [
+        {
+          "prompt_tokens_over": 272000,
+          "input": 20.0,
+          "output": 75.0
+        }
+      ],
+      "note": "OpenAI Standard list price"
+    },
+    "gpt-6.1-sol": {
+      "input": 2.0,
+      "cached_input": 0.1,
+      "cache_creation_5m": 2.5,
+      "output": 10.0,
+      "tiers": [
+        {
+          "prompt_tokens_over": 272000,
+          "input": 4.0,
+          "output": 15.0
+        }
+      ],
+      "note": "OpenAI Standard list price"
+    },
+    "gpt-6-sol": {
+      "input": 2.0,
+      "cached_input": 0.2,
+      "cache_creation_5m": 2.5,
+      "output": 10.0,
+      "tiers": [
+        {
+          "prompt_tokens_over": 272000,
+          "input": 4.0,
+          "output": 15.0
+        }
+      ],
+      "note": "OpenAI Standard list price"
+    },
+    "gpt-6-luna": {
+      "input": 0.1,
+      "cached_input": 0.01,
+      "cache_creation_5m": 0.125,
+      "output": 0.5,
+      "tiers": [
+        {
+          "prompt_tokens_over": 272000,
+          "input": 0.2,
+          "output": 0.75
+        }
+      ],
+      "note": "OpenAI Standard list price"
+    },
+    "gpt-6": {
+      "input": 2.0,
+      "cached_input": 0.2,
+      "cache_creation_5m": 2.5,
+      "output": 10.0,
+      "tiers": [
+        {
+          "prompt_tokens_over": 272000,
+          "input": 4.0,
+          "output": 15.0
+        }
+      ],
+      "note": "OpenAI does not document a bare gpt-6 id; priced as the unsuffixed sol tier of the GPT-6 family. Override this entry in a pricing profile if your provider maps gpt-6 somewhere else."
+    },
+    "gpt-5.6-cyber": {
+      "input": 12.5,
+      "cached_input": 1.25,
+      "cache_creation_5m": 15.625,
+      "output": 75.0,
+      "tiers": [
+        {
+          "prompt_tokens_over": 272000,
+          "input": 25.0,
+          "output": 112.5
+        }
+      ],
+      "note": "OpenAI Standard list price"
+    },
+    "gpt-5.6-sol": {
+      "input": 4.0,
+      "cached_input": 0.4,
+      "cache_creation_5m": 5.0,
+      "output": 20.0,
+      "tiers": [
+        {
+          "prompt_tokens_over": 272000,
+          "input": 8.0,
+          "output": 30.0
+        }
+      ],
+      "note": "promotional Standard price, documented as available at least through 2026-11-21"
+    },
+    "gpt-5.6-terra": {
+      "input": 2.0,
+      "cached_input": 0.2,
+      "cache_creation_5m": 2.5,
+      "output": 12.0,
+      "tiers": [
+        {
+          "prompt_tokens_over": 272000,
+          "input": 4.0,
+          "output": 18.0
+        }
+      ],
+      "note": "OpenAI Standard list price"
+    },
+    "gpt-5.6-luna": {
+      "input": 0.2,
+      "cached_input": 0.02,
+      "cache_creation_5m": 0.25,
+      "output": 1.2,
+      "tiers": [
+        {
+          "prompt_tokens_over": 272000,
+          "input": 0.4,
+          "output": 1.8
+        }
+      ],
+      "note": "OpenAI Standard list price"
+    },
+    "gpt-5.6": {
+      "input": 4.0,
+      "cached_input": 0.4,
+      "cache_creation_5m": 5.0,
+      "output": 20.0,
+      "tiers": [
+        {
+          "prompt_tokens_over": 272000,
+          "input": 8.0,
+          "output": 30.0
+        }
+      ],
+      "note": "alias that routes to gpt-5.6-sol"
+    },
+    "chat-latest": {
+      "input": 5.0,
+      "cached_input": 0.5,
+      "output": 30.0,
+      "note": "ChatGPT Instant alias price used by Codex sessions"
+    },
+    "gpt-5.5-pro": {
+      "input": 30.0,
+      "cached_input": 30.0,
+      "output": 180.0
+    },
+    "gpt-5.5": {
+      "input": 5.0,
+      "cached_input": 0.5,
+      "output": 30.0
+    },
+    "gpt-5.4-pro": {
+      "input": 30.0,
+      "cached_input": 30.0,
+      "output": 180.0
+    },
+    "gpt-5.4": {
+      "input": 2.5,
+      "cached_input": 0.25,
+      "output": 15.0
+    },
+    "gpt-5.4-mini": {
+      "input": 0.75,
+      "cached_input": 0.075,
+      "output": 4.5
+    },
+    "gpt-5.4-nano": {
+      "input": 0.2,
+      "cached_input": 0.02,
+      "output": 1.25
+    },
+    "gpt-5.3-codex": {
+      "input": 1.75,
+      "cached_input": 0.175,
+      "output": 14.0
+    },
+    "gpt-5.2": {
+      "input": 1.75,
+      "cached_input": 0.175,
+      "output": 14.0
+    },
+    "gpt-5.2-chat-latest": {
+      "input": 1.75,
+      "cached_input": 0.175,
+      "output": 14.0
+    },
+    "gpt-5.2-codex": {
+      "input": 1.75,
+      "cached_input": 0.175,
+      "output": 14.0
+    },
+    "gpt-5.2-pro": {
+      "input": 21.0,
+      "cached_input": 21.0,
+      "output": 168.0
+    },
+    "gpt-5.1": {
+      "input": 1.25,
+      "cached_input": 0.125,
+      "output": 10.0
+    },
+    "gpt-5.1-chat-latest": {
+      "input": 1.25,
+      "cached_input": 0.125,
+      "output": 10.0
+    },
+    "gpt-5.1-codex": {
+      "input": 1.25,
+      "cached_input": 0.125,
+      "output": 10.0
+    },
+    "gpt-5.1-codex-mini": {
+      "input": 0.25,
+      "cached_input": 0.025,
+      "output": 2.0
+    },
+    "gpt-5": {
+      "input": 1.25,
+      "cached_input": 0.125,
+      "output": 10.0
+    },
+    "gpt-5-codex": {
+      "input": 1.25,
+      "cached_input": 0.125,
+      "output": 10.0
+    },
+    "gpt-5-chat-latest": {
+      "input": 1.25,
+      "cached_input": 0.125,
+      "output": 10.0
+    },
+    "gpt-5-pro": {
+      "input": 15.0,
+      "cached_input": 15.0,
+      "output": 120.0
+    },
+    "gpt-5-mini": {
+      "input": 0.25,
+      "cached_input": 0.025,
+      "output": 2.0
+    },
+    "gpt-5-nano": {
+      "input": 0.05,
+      "cached_input": 0.005,
+      "output": 0.4
+    },
+    "gpt-4.1": {
+      "input": 2.0,
+      "cached_input": 0.5,
+      "output": 8.0
+    },
+    "gpt-4.1-mini": {
+      "input": 0.4,
+      "cached_input": 0.1,
+      "output": 1.6
+    },
+    "gpt-4.1-nano": {
+      "input": 0.1,
+      "cached_input": 0.025,
+      "output": 0.4
+    },
+    "gpt-4o": {
+      "input": 2.5,
+      "cached_input": 1.25,
+      "output": 10.0
+    },
+    "gpt-4o-mini": {
+      "input": 0.15,
+      "cached_input": 0.075,
+      "output": 0.6
+    },
+    "o3": {
+      "input": 2.0,
+      "cached_input": 0.5,
+      "output": 8.0
+    },
+    "o3-deep-research": {
+      "input": 10.0,
+      "cached_input": 2.5,
+      "output": 40.0
+    },
+    "o4-mini": {
+      "input": 1.1,
+      "cached_input": 0.275,
+      "output": 4.4
+    },
+    "o4-mini-deep-research": {
+      "input": 2.0,
+      "cached_input": 0.5,
+      "output": 8.0
+    }
+  }
+}

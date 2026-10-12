@@ -8,6 +8,7 @@ pub mod kimi_code;
 pub mod model;
 pub mod opencode;
 pub mod pi;
+pub mod pricing;
 pub mod snapshot;
 
 use crate::config::{AppConfig, Language, SourcePreference};
@@ -15,6 +16,7 @@ use crate::date::{
     days_in_month, month_abbr, parse_date_filter_value, today_utc, weekday_label, CivilDate,
 };
 use crate::model::{ReportData, Roots, Source, Usage};
+use crate::pricing::{PricingOptions, PricingSelection};
 use crate::render::{
     bold_yellow, center_visible, dim, print_rounded_panel, print_table, terminal_panel_width,
 };
@@ -24,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 mod date;
 mod render;
@@ -58,8 +60,26 @@ struct Cli {
     #[arg(long, global = true, help = "Read or write the JSON snapshot file")]
     data_file: Option<PathBuf>,
 
-    #[arg(long, global = true, help = "Load custom model pricing JSON file")]
-    pricing_file: Option<PathBuf>,
+    #[arg(long, global = true, help = "Load a pricing profile by name")]
+    pricing_profile: Option<String>,
+
+    #[arg(long, global = true, help = "Directory that holds pricing profiles")]
+    pricing_dir: Option<PathBuf>,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Load an extra pricing JSON file; repeat to stack files, later files win"
+    )]
+    pricing_file: Vec<PathBuf>,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Ignore the embedded default pricing and use only the selected files"
+    )]
+    no_builtin_pricing: bool,
 
     #[arg(
         long,
@@ -84,6 +104,11 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: Option<ConfigCommand>,
+    },
+    #[command(about = "Inspect, validate, and switch model pricing profiles")]
+    Pricing {
+        #[command(subcommand)]
+        command: Option<PricingCommand>,
     },
     #[command(about = "Scan local logs and merge them into the JSON snapshot")]
     Fetch,
@@ -132,6 +157,36 @@ enum ConfigCommand {
     Show,
     #[command(about = "Delete the configuration file and use defaults")]
     Reset,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+enum PricingCommand {
+    #[command(about = "List pricing profiles found in the pricing directory")]
+    List,
+    #[command(about = "Show the effective pricing files, order, and accounting")]
+    Show,
+    #[command(about = "Persist a pricing profile as the default for every command")]
+    Use {
+        #[arg(help = "Profile name, or `builtin` to drop back to the embedded defaults")]
+        name: String,
+    },
+    #[command(about = "Write editable copies of the embedded pricing files")]
+    Init {
+        #[arg(long, help = "Overwrite pricing files that already exist")]
+        force: bool,
+    },
+    #[command(about = "Validate pricing files without running a report")]
+    Check {
+        #[arg(help = "Files to validate; defaults to every file in the active selection")]
+        files: Vec<PathBuf>,
+    },
+    #[command(about = "Explain which pricing file and rule prices a model")]
+    Match {
+        #[arg(help = "Model id exactly as it appears in the logs")]
+        model: String,
+        #[arg(long, value_enum, help = "Only explain this data source")]
+        source: Option<SourceFilter>,
+    },
 }
 
 impl Command {
@@ -200,7 +255,7 @@ struct EffectiveSettings {
     source: SourceFilter,
     limit: usize,
     data_file: PathBuf,
-    pricing_file: Option<PathBuf>,
+    pricing: PricingSelection,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -274,8 +329,15 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     let command = cli.command.unwrap_or(Command::Summary);
     let app_config = config::load_or_default()?;
+    let pricing_options = PricingOptions {
+        dir: cli.pricing_dir.clone(),
+        profile: cli.pricing_profile.clone(),
+        files: cli.pricing_file.clone(),
+        use_builtin: cli.no_builtin_pricing.then_some(false),
+    };
     let command = match command {
         Command::Config { command } => return run_config(app_config, command),
+        Command::Pricing { command } => return run_pricing(app_config, &pricing_options, command),
         command => command,
     };
 
@@ -283,15 +345,11 @@ pub fn run() -> Result<()> {
         language: app_config.language,
         source: cli.source.unwrap_or_else(|| app_config.source.into()),
         limit: cli.limit.unwrap_or(app_config.limit),
-        data_file: expand_home_path(
+        data_file: config::expand_home_path(
             cli.data_file
                 .unwrap_or_else(|| app_config.data_file.clone()),
         )?,
-        pricing_file: cli
-            .pricing_file
-            .or_else(|| app_config.pricing_file.clone())
-            .map(expand_home_path)
-            .transpose()?,
+        pricing: pricing::resolve(&app_config, &pricing_options)?,
     };
     let home = cli.home.clone();
 
@@ -308,7 +366,7 @@ pub fn run() -> Result<()> {
             settings.source,
             home,
             &settings.data_file,
-            settings.pricing_file.as_deref(),
+            &settings.pricing,
             settings.language,
         );
     }
@@ -332,9 +390,9 @@ pub fn run() -> Result<()> {
 
     let shows_cost = command.shows_cost();
     let pricing = if shows_cost {
-        load_pricing(settings.pricing_file.as_deref())?
+        pricing::load(&settings.pricing)?
     } else {
-        billing::Pricing::default()
+        billing::Pricing::empty()
     };
     let date_filter = DateFilter::parse(cli.since.as_deref(), cli.until.as_deref())?;
     let mut data = report_data(settings.source, home, &settings.data_file, cli.from_json)?;
@@ -342,6 +400,7 @@ pub fn run() -> Result<()> {
 
     match command {
         Command::Config { .. } => unreachable!("config returns before report rendering"),
+        Command::Pricing { .. } => unreachable!("pricing returns before report rendering"),
         Command::Fetch => unreachable!("fetch returns before report rendering"),
         Command::Summary => print_summary(&data, settings.language, &pricing),
         Command::Days { chant } => {
@@ -398,6 +457,17 @@ fn run_config_interactive(mut app_config: AppConfig) -> Result<()> {
         app_config.language,
         label_config_data_file(app_config.language),
         &app_config.data_file,
+    )?;
+    app_config.pricing_profile = prompt_pricing_profile(app_config.language, &app_config)?;
+    app_config.pricing_dir = prompt_optional_path(
+        app_config.language,
+        label_config_pricing_dir(app_config.language),
+        app_config.pricing_dir.as_deref(),
+    )?;
+    app_config.pricing_files = prompt_path_list(
+        app_config.language,
+        label_config_pricing_files(app_config.language),
+        &app_config.pricing_files,
     )?;
     app_config.pricing_file = prompt_optional_path(
         app_config.language,
@@ -462,8 +532,32 @@ fn print_config(app_config: AppConfig) -> Result<()> {
     );
     println!(
         "{}: {}",
+        label_config_pricing_profile(language),
+        format_pricing_profile(app_config.pricing_profile.as_deref(), language)
+    );
+    println!(
+        "{}: {}",
+        label_config_pricing_dir(language),
+        format_optional_path(app_config.pricing_dir.as_deref(), language)
+    );
+    println!(
+        "{}: {}",
+        label_config_pricing_files(language),
+        format_path_list(&app_config.pricing_files, language)
+    );
+    println!(
+        "{}: {}",
         label_config_pricing_file(language),
         format_optional_path(app_config.pricing_file.as_deref(), language)
+    );
+    println!(
+        "{}: {}",
+        label_config_pricing_builtin(language),
+        if app_config.pricing_builtin {
+            label_enabled(language)
+        } else {
+            label_disabled(language)
+        }
     );
     println!(
         "{}: {}",
@@ -498,10 +592,409 @@ fn reset_config(language: Language) -> Result<()> {
     Ok(())
 }
 
-fn load_pricing(pricing_file: Option<&Path>) -> Result<billing::Pricing> {
-    match pricing_file {
-        Some(path) => billing::Pricing::load(path),
-        None => Ok(billing::Pricing::default()),
+fn run_pricing(
+    app_config: AppConfig,
+    options: &PricingOptions,
+    command: Option<PricingCommand>,
+) -> Result<()> {
+    match command.unwrap_or(PricingCommand::Show) {
+        PricingCommand::List => print_pricing_profiles(&app_config, options),
+        PricingCommand::Show => print_pricing_summary(&app_config, options),
+        PricingCommand::Use { name } => use_pricing_profile(app_config, options, name),
+        PricingCommand::Init { force } => init_pricing_profile(&app_config, options, force),
+        PricingCommand::Check { files } => check_pricing_files(&app_config, options, files),
+        PricingCommand::Match { model, source } => {
+            print_pricing_match(&app_config, options, &model, source)
+        }
+    }
+}
+
+fn print_pricing_profiles(app_config: &AppConfig, options: &PricingOptions) -> Result<()> {
+    let language = app_config.language;
+    let selection = pricing::resolve(app_config, options)?;
+    let profiles = match &selection.dir {
+        Some(dir) => pricing::list_profiles(dir)?,
+        None => vec![pricing::builtin_profile_summary()],
+    };
+    let active = selection
+        .profile
+        .clone()
+        .unwrap_or_else(|| pricing::BUILTIN_PROFILE.to_string());
+
+    println!("{}", label_pricing_profiles_title(language));
+    println!(
+        "{}: {}",
+        label_pricing_dir(language),
+        format_optional_path(selection.dir.as_deref(), language)
+    );
+    println!(
+        "{}: {}",
+        label_pricing_profile(language),
+        format_pricing_profile(selection.profile.as_deref(), language)
+    );
+    println!();
+
+    let rows = profiles
+        .iter()
+        .map(|profile| {
+            vec![
+                if profile.name == active {
+                    format!("{} {}", profile.name, label_pricing_active(language))
+                } else {
+                    profile.name.clone()
+                },
+                profile.file_count().to_string(),
+                profile.display_path(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_table(
+        &[
+            label_pricing_profile_column(language),
+            label_pricing_files_word(language),
+            label_pricing_path_column(language),
+        ],
+        &rows,
+    );
+
+    if !selection.extra_files.is_empty() {
+        println!();
+        println!("{}:", label_pricing_extra_files(language));
+        for file in &selection.extra_files {
+            println!("- {}", file.display());
+        }
+    }
+    Ok(())
+}
+
+fn print_pricing_summary(app_config: &AppConfig, options: &PricingOptions) -> Result<()> {
+    let language = app_config.language;
+    let selection = pricing::resolve(app_config, options)?;
+    let active_pricing = pricing::load(&selection)?;
+
+    println!("{}", label_pricing_title(language));
+    println!(
+        "{}: {}",
+        label_pricing_dir(language),
+        format_optional_path(selection.dir.as_deref(), language)
+    );
+    println!(
+        "{}: {}",
+        label_pricing_profile(language),
+        format_pricing_profile(selection.profile.as_deref(), language)
+    );
+    println!(
+        "{}: {}",
+        label_pricing_builtin(language),
+        if selection.use_builtin {
+            label_enabled(language)
+        } else {
+            label_disabled(language)
+        }
+    );
+    println!(
+        "{}: {} {}",
+        label_pricing_models(language),
+        active_pricing.model_count(),
+        label_pricing_entries(language)
+    );
+
+    println!();
+    println!("{}:", label_pricing_layers(language));
+    let rows = active_pricing
+        .layers()
+        .iter()
+        .enumerate()
+        .map(|(index, layer)| {
+            vec![
+                (index + 1).to_string(),
+                layer
+                    .sources()
+                    .map(|sources| {
+                        sources
+                            .iter()
+                            .map(|source| source.label())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_else(|| label_pricing_all_sources(language).to_string()),
+                layer.model_count().to_string(),
+                layer
+                    .name()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| layer.label().to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_table(
+        &[
+            label_pricing_order(language),
+            label_source(language),
+            label_pricing_file_count(language),
+            label_pricing_file_column(language),
+        ],
+        &rows,
+    );
+
+    if !selection.extra_files.is_empty() {
+        println!();
+        println!("{}:", label_pricing_extra_files(language));
+        for file in &selection.extra_files {
+            println!("- {}", file.display());
+        }
+    }
+
+    let described = active_pricing
+        .layers()
+        .iter()
+        .filter(|layer| !layer.is_builtin())
+        .filter(|layer| layer.description().is_some())
+        .collect::<Vec<_>>();
+    if !described.is_empty() {
+        println!();
+        println!("{}:", label_pricing_descriptions(language));
+        for layer in described {
+            println!(
+                "- {}: {}",
+                layer.name().unwrap_or_else(|| layer.label()),
+                layer.description().unwrap_or_default()
+            );
+        }
+    }
+
+    println!();
+    println!("{}:", label_pricing_accounting(language));
+    let accounting = active_pricing.accounting();
+    let mut accounting_rows = vec![vec![
+        label_pricing_all_sources(language).to_string(),
+        accounting.default_mode().label().to_string(),
+    ]];
+    accounting_rows.extend(
+        accounting
+            .source_overrides()
+            .map(|(source, mode)| vec![source.label().to_string(), mode.label().to_string()]),
+    );
+    accounting_rows.push(vec![
+        text(
+            language,
+            "legacy single-event Codex sessions",
+            "旧版 Codex 单事件会话",
+        )
+        .to_string(),
+        if accounting.legacy_codex_event_subset() {
+            billing::AccountingMode::CachedInputSubset
+                .label()
+                .to_string()
+        } else {
+            label_disabled(language).to_string()
+        },
+    ]);
+    print_table(
+        &[
+            label_source(language),
+            label_pricing_accounting_column(language),
+        ],
+        &accounting_rows,
+    );
+    Ok(())
+}
+
+fn use_pricing_profile(
+    mut app_config: AppConfig,
+    options: &PricingOptions,
+    name: String,
+) -> Result<()> {
+    let language = app_config.language;
+    let selection = pricing::resolve(&app_config, options)?;
+    let normalized = pricing::normalize_profile(&name);
+    if let Some(profile) = &normalized {
+        // Fail before writing when the profile does not exist.
+        pricing::files_for_profile(pricing::require_dir(&selection)?, profile)?;
+    }
+    app_config.pricing_profile = normalized;
+    let path = config::save(&app_config)?;
+
+    println!(
+        "{}: {}",
+        label_pricing_profile(language),
+        format_pricing_profile(app_config.pricing_profile.as_deref(), language)
+    );
+    println!("{}: {}", label_config_file(language), path.display());
+    Ok(())
+}
+
+fn init_pricing_profile(
+    app_config: &AppConfig,
+    options: &PricingOptions,
+    force: bool,
+) -> Result<()> {
+    let language = app_config.language;
+    let selection = pricing::resolve(app_config, options)?;
+    let outcome = pricing::init_profile_dir(pricing::require_dir(&selection)?, force)?;
+
+    println!(
+        "{}: {}",
+        label_pricing_profile_dir(language),
+        outcome.dir.display()
+    );
+    for path in &outcome.written {
+        println!("+ {}", path.display());
+    }
+    for path in &outcome.skipped {
+        println!("= {} ({})", path.display(), label_pricing_skipped(language));
+    }
+    println!();
+    println!(
+        "{} default",
+        text(language, "next: tkc pricing use", "下一步: tkc pricing use")
+    );
+    Ok(())
+}
+
+fn check_pricing_files(
+    app_config: &AppConfig,
+    options: &PricingOptions,
+    files: Vec<PathBuf>,
+) -> Result<()> {
+    let language = app_config.language;
+    let selection = pricing::resolve(app_config, options)?;
+    let files = if files.is_empty() {
+        let mut resolved = Vec::new();
+        if let Some(profile) = &selection.profile {
+            let dir = pricing::require_dir(&selection)?;
+            resolved.extend(pricing::files_for_profile(dir, profile)?);
+        }
+        resolved.extend(selection.extra_files.iter().cloned());
+        resolved
+    } else {
+        files
+            .iter()
+            .map(|file| config::expand_home_path(file.clone()))
+            .collect::<Result<Vec<_>>>()?
+    };
+
+    if files.is_empty() {
+        println!(
+            "{}: {}",
+            label_pricing_check(language),
+            text(
+                language,
+                "only the embedded default pricing is active",
+                "当前只使用内置默认价格"
+            )
+        );
+        return Ok(());
+    }
+
+    let mut failures = Vec::new();
+    for file in &files {
+        match billing::PricingLayer::from_path(file) {
+            Ok(layer) => println!(
+                "{}  {}  ({} {})",
+                label_pricing_check_ok(language),
+                file.display(),
+                layer.model_count(),
+                label_pricing_entries(language)
+            ),
+            Err(err) => {
+                println!(
+                    "{}  {}  {err:#}",
+                    label_pricing_check_failed(language),
+                    file.display()
+                );
+                failures.push(file.display().to_string());
+            }
+        }
+    }
+    if failures.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "{} pricing file(s) failed validation: {}",
+        failures.len(),
+        failures.join(", ")
+    ))
+}
+
+fn print_pricing_match(
+    app_config: &AppConfig,
+    options: &PricingOptions,
+    model: &str,
+    source: Option<SourceFilter>,
+) -> Result<()> {
+    let language = app_config.language;
+    let selection = pricing::resolve(app_config, options)?;
+    let active_pricing = pricing::load(&selection)?;
+    let sources = match source {
+        None | Some(SourceFilter::All) => Source::ALL.to_vec(),
+        Some(filter) => vec![source_from_filter(filter)],
+    };
+
+    println!("{}", label_pricing_match_title(language));
+    println!("{}: {model}", label_model(language));
+    println!(
+        "{}: {}",
+        label_pricing_profile(language),
+        format_pricing_profile(selection.profile.as_deref(), language)
+    );
+    println!();
+
+    let rows = sources
+        .iter()
+        .map(|source| {
+            let mut row = vec![source.label().to_string()];
+            match active_pricing.lookup(*source, model) {
+                Some(found) if found.unpriced => {
+                    row.push(label_pricing_unpriced(language).to_string());
+                    row.extend(std::iter::repeat_n("-".to_string(), 3));
+                    row.push(found.layer.to_string());
+                }
+                Some(found) => {
+                    row.push(found.key.to_string());
+                    row.push(format_unit_price(found.prices.input));
+                    row.push(format_unit_price(found.prices.cached_input));
+                    row.push(format_unit_price(found.prices.output));
+                    row.push(found.layer.to_string());
+                }
+                None => {
+                    row.push(label_pricing_unpriced(language).to_string());
+                    row.extend(std::iter::repeat_n("-".to_string(), 3));
+                    row.push(label_none(language).to_string());
+                }
+            }
+            row
+        })
+        .collect::<Vec<_>>();
+
+    print_table(
+        &[
+            label_source(language),
+            label_pricing_key(language),
+            label_input(language),
+            label_cached(language),
+            label_output(language),
+            label_pricing_file_column(language),
+        ],
+        &rows,
+    );
+
+    for source in &sources {
+        if let Some(found) = active_pricing.lookup(*source, model) {
+            if let Some(note) = found.note {
+                println!("{}: {note}", source.label());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn source_from_filter(filter: SourceFilter) -> Source {
+    match filter {
+        SourceFilter::All | SourceFilter::Claude => Source::Claude,
+        SourceFilter::Codex => Source::Codex,
+        SourceFilter::OpenCode => Source::OpenCode,
+        SourceFilter::Pi => Source::Pi,
+        SourceFilter::KimiCode => Source::KimiCode,
     }
 }
 
@@ -514,7 +1007,7 @@ fn resolve_obsidian_snapshot_file(
         .clone()
         .or_else(|| app_config.obsidian_snapshot_file.clone())
         .unwrap_or_else(|| settings.data_file.clone());
-    expand_home_path(path)
+    config::expand_home_path(path)
 }
 
 fn resolve_obsidian_dashboard_file(
@@ -525,7 +1018,7 @@ fn resolve_obsidian_dashboard_file(
         .clone()
         .or_else(|| app_config.obsidian_dashboard_file.clone())
         .ok_or_else(|| anyhow!("Obsidian dashboard file is not configured; run tkc config"))?;
-    expand_home_path(path)
+    config::expand_home_path(path)
 }
 
 fn run_obsidian(
@@ -654,10 +1147,10 @@ fn run_doctor(
     filter: SourceFilter,
     home: Option<PathBuf>,
     data_file: &Path,
-    pricing_file: Option<&Path>,
+    pricing_selection: &PricingSelection,
     language: Language,
 ) -> Result<()> {
-    let home = home.unwrap_or(home_dir()?);
+    let home = resolve_home(home)?;
     let roots = Roots { home: home.clone() };
     let config_path = config::config_path()?;
     let mut rows = vec![
@@ -676,8 +1169,8 @@ fn run_doctor(
             true,
             filter.as_str().to_string(),
         ),
-        doctor_pricing_row(pricing_file, language),
     ];
+    rows.extend(doctor_pricing_rows(pricing_selection, language));
 
     if source_filter_includes(filter, Source::Claude) {
         let path = roots.claude_projects();
@@ -784,31 +1277,51 @@ fn doctor_row(check: &str, ok: bool, detail: String) -> DoctorRow {
     }
 }
 
-fn doctor_pricing_row(pricing_file: Option<&Path>, language: Language) -> DoctorRow {
-    match pricing_file {
-        Some(path) => match billing::Pricing::load(path) {
-            Ok(pricing) => doctor_row(
-                label_config_pricing_file(language),
-                true,
-                format!(
-                    "{} ({} {})",
-                    path.display(),
-                    pricing.custom_model_count(),
-                    label_custom_models(language)
-                ),
-            ),
-            Err(err) => doctor_row(
-                label_config_pricing_file(language),
-                false,
-                format!("{} ({err:#})", path.display()),
-            ),
+fn doctor_pricing_rows(selection: &PricingSelection, language: Language) -> Vec<DoctorRow> {
+    let profile = selection
+        .profile
+        .clone()
+        .unwrap_or_else(|| pricing::BUILTIN_PROFILE.to_string());
+    let mut rows = vec![doctor_row(
+        label_pricing_profile(language),
+        true,
+        match &selection.dir {
+            Some(dir) => format!("{profile} ({})", dir.display()),
+            None => profile,
         },
-        None => doctor_row(
-            label_config_pricing_file(language),
+    )];
+
+    rows.push(match pricing::load(selection) {
+        Ok(active_pricing) => doctor_row(
+            label_pricing_files(language),
             true,
-            text(language, "built-in pricing only", "仅使用内置价格").to_string(),
+            format!(
+                "{} {} / {} {} / {} {}",
+                active_pricing.layers().len(),
+                label_pricing_layers_word(language),
+                active_pricing.model_count(),
+                label_pricing_models_word(language),
+                active_pricing.accounting().default_mode().label(),
+                label_pricing_accounting_word(language)
+            ),
         ),
+        Err(err) => doctor_row(label_pricing_files(language), false, format!("{err:#}")),
+    });
+
+    let extra = &selection.extra_files;
+    if !extra.is_empty() {
+        let ok = extra.iter().all(|file| file.exists());
+        rows.push(doctor_row(
+            label_pricing_extra_files(language),
+            ok,
+            extra
+                .iter()
+                .map(|file| file.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
     }
+    rows
 }
 
 fn source_filter_includes(filter: SourceFilter, source: Source) -> bool {
@@ -931,8 +1444,65 @@ fn prompt_path(language: Language, label: &str, current: &Path) -> Result<PathBu
     if input.trim().is_empty() {
         Ok(current.to_path_buf())
     } else {
-        expand_home_path(PathBuf::from(input.trim()))
+        config::expand_home_path(PathBuf::from(input.trim()))
     }
+}
+
+fn prompt_pricing_profile(language: Language, app_config: &AppConfig) -> Result<Option<String>> {
+    let dir = pricing::resolve_dir(app_config, &PricingOptions::default())?;
+    let profiles = match &dir {
+        Some(dir) => pricing::list_profiles(dir)?,
+        None => vec![pricing::builtin_profile_summary()],
+    };
+    let names = profiles
+        .iter()
+        .map(|profile| profile.name.as_str())
+        .collect::<Vec<_>>();
+    let current = app_config
+        .pricing_profile
+        .clone()
+        .unwrap_or_else(|| pricing::BUILTIN_PROFILE.to_string());
+    loop {
+        let prompt = format!(
+            "{} [{}] ({}: {}): ",
+            label_config_pricing_profile(language),
+            names.join("/"),
+            label_current(language),
+            current
+        );
+        let input = prompt_line(&prompt)?;
+        if input.trim().is_empty() {
+            return Ok(app_config.pricing_profile.clone());
+        }
+        match pricing::normalize_profile(&input) {
+            None => return Ok(None),
+            Some(name) if names.contains(&name.as_str()) => return Ok(Some(name)),
+            Some(name) => eprintln!("{}: {name}", label_pricing_unknown_profile(language)),
+        }
+    }
+}
+
+fn prompt_path_list(language: Language, label: &str, current: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let prompt = format!(
+        "{} [path,path/none] ({}: {}): ",
+        label,
+        label_current(language),
+        format_path_list(current, language)
+    );
+    let input = prompt_line(&prompt)?;
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(current.to_vec());
+    }
+    if matches!(input.to_ascii_lowercase().as_str(), "none" | "null" | "-") {
+        return Ok(Vec::new());
+    }
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| config::expand_home_path(PathBuf::from(value)))
+        .collect()
 }
 
 fn prompt_optional_path(
@@ -954,12 +1524,45 @@ fn prompt_optional_path(
     if matches!(input.to_ascii_lowercase().as_str(), "none" | "null" | "-") {
         return Ok(None);
     }
-    Ok(Some(expand_home_path(PathBuf::from(input))?))
+    Ok(Some(config::expand_home_path(PathBuf::from(input))?))
 }
 
 fn format_optional_path(path: Option<&Path>, language: Language) -> String {
     path.map(|path| path.display().to_string())
         .unwrap_or_else(|| label_none(language).to_string())
+}
+
+fn format_path_list(paths: &[PathBuf], language: Language) -> String {
+    if paths.is_empty() {
+        return label_none(language).to_string();
+    }
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_pricing_profile(profile: Option<&str>, language: Language) -> String {
+    match profile {
+        Some(profile) => profile.to_string(),
+        None => text(
+            language,
+            "builtin (embedded defaults)",
+            "builtin（内置默认价格）",
+        )
+        .to_string(),
+    }
+}
+
+fn format_unit_price(value: f64) -> String {
+    let text = format!("{value:.6}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text.is_empty() {
+        "$0".to_string()
+    } else {
+        format!("${text}")
+    }
 }
 
 fn prompt_positive_usize(language: Language, label: &str, current: usize) -> Result<usize> {
@@ -984,18 +1587,6 @@ fn prompt_line(prompt: &str) -> Result<String> {
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     Ok(input.trim_end_matches(['\r', '\n']).to_string())
-}
-
-fn expand_home_path(path: PathBuf) -> Result<PathBuf> {
-    let mut components = path.components();
-    if let Some(Component::Normal(first)) = components.next() {
-        if first == "~" {
-            let mut expanded = home_dir()?;
-            expanded.extend(components);
-            return Ok(expanded);
-        }
-    }
-    Ok(path)
 }
 
 fn print_warnings(language: Language, warnings: &[String]) {
@@ -1162,8 +1753,160 @@ fn label_config_data_file(language: Language) -> &'static str {
     text(language, "Snapshot data file", "快照数据文件")
 }
 
+fn label_config_pricing_profile(language: Language) -> &'static str {
+    text(language, "Pricing profile", "计费配置")
+}
+
+fn label_config_pricing_dir(language: Language) -> &'static str {
+    text(language, "Pricing profile directory", "计费配置目录")
+}
+
+fn label_config_pricing_files(language: Language) -> &'static str {
+    text(language, "Extra pricing files", "额外价格文件")
+}
+
 fn label_config_pricing_file(language: Language) -> &'static str {
-    text(language, "Custom pricing file", "自定义价格文件")
+    text(language, "Legacy single pricing file", "旧版单一价格文件")
+}
+
+fn label_config_pricing_builtin(language: Language) -> &'static str {
+    text(language, "Embedded default pricing", "内置默认价格")
+}
+
+fn label_enabled(language: Language) -> &'static str {
+    text(language, "enabled", "已启用")
+}
+
+fn label_disabled(language: Language) -> &'static str {
+    text(language, "disabled", "已禁用")
+}
+
+fn label_pricing_title(language: Language) -> &'static str {
+    text(language, "tokencheck pricing", "tokencheck 计费")
+}
+
+fn label_pricing_profiles_title(language: Language) -> &'static str {
+    text(language, "Pricing profiles", "计费配置列表")
+}
+
+fn label_pricing_dir(language: Language) -> &'static str {
+    text(language, "Pricing directory", "计费目录")
+}
+
+fn label_pricing_profile_dir(language: Language) -> &'static str {
+    text(language, "Profile directory", "配置目录")
+}
+
+fn label_pricing_profile(language: Language) -> &'static str {
+    text(language, "Active profile", "当前计费配置")
+}
+
+fn label_pricing_builtin(language: Language) -> &'static str {
+    text(language, "Embedded defaults", "内置默认价格")
+}
+
+fn label_pricing_layers(language: Language) -> &'static str {
+    text(
+        language,
+        "Active pricing layers, lowest precedence first",
+        "生效的价格层（按优先级从低到高）",
+    )
+}
+
+fn label_pricing_models(language: Language) -> &'static str {
+    text(language, "Priced model entries", "已配置价格条目")
+}
+
+fn label_pricing_entries(language: Language) -> &'static str {
+    text(language, "entries", "条")
+}
+
+fn label_pricing_active(language: Language) -> &'static str {
+    text(language, "(active)", "（当前）")
+}
+
+fn label_pricing_files(language: Language) -> &'static str {
+    text(language, "Pricing files", "价格文件")
+}
+
+fn label_pricing_files_word(language: Language) -> &'static str {
+    text(language, "files", "个文件")
+}
+
+fn label_pricing_accounting_word(language: Language) -> &'static str {
+    text(language, "accounting", "计费口径")
+}
+
+fn label_pricing_extra_files(language: Language) -> &'static str {
+    text(language, "Extra pricing files", "额外价格文件")
+}
+
+fn label_pricing_descriptions(language: Language) -> &'static str {
+    text(language, "Loaded file descriptions", "已加载文件说明")
+}
+
+fn label_pricing_accounting(language: Language) -> &'static str {
+    text(language, "Accounting", "计费口径")
+}
+
+fn label_pricing_all_sources(language: Language) -> &'static str {
+    text(language, "all", "全部")
+}
+
+fn label_pricing_order(language: Language) -> &'static str {
+    text(language, "#", "#")
+}
+
+fn label_pricing_file_count(language: Language) -> &'static str {
+    text(language, "models", "模型数")
+}
+
+fn label_pricing_file_column(language: Language) -> &'static str {
+    text(language, "file", "文件")
+}
+
+fn label_pricing_profile_column(language: Language) -> &'static str {
+    text(language, "profile", "配置")
+}
+
+fn label_pricing_path_column(language: Language) -> &'static str {
+    text(language, "path", "路径")
+}
+
+fn label_pricing_accounting_column(language: Language) -> &'static str {
+    text(language, "mode", "模式")
+}
+
+fn label_pricing_key(language: Language) -> &'static str {
+    text(language, "matched key", "命中条目")
+}
+
+fn label_pricing_match_title(language: Language) -> &'static str {
+    text(language, "Pricing match", "价格匹配结果")
+}
+
+fn label_pricing_unpriced(language: Language) -> &'static str {
+    text(language, "unpriced", "未定价")
+}
+
+fn label_pricing_unknown_profile(language: Language) -> &'static str {
+    text(language, "unknown pricing profile", "未知的计费配置")
+}
+
+fn label_pricing_skipped(language: Language) -> &'static str {
+    text(language, "kept, already exists", "已存在，保留原文件")
+}
+
+fn label_pricing_check(language: Language) -> &'static str {
+    text(language, "pricing check", "价格检查")
+}
+
+fn label_pricing_check_ok(language: Language) -> &'static str {
+    text(language, "ok", "正常")
+}
+
+fn label_pricing_check_failed(language: Language) -> &'static str {
+    text(language, "invalid", "无效")
 }
 
 fn label_config_obsidian_snapshot_file(language: Language) -> &'static str {
@@ -1250,8 +1993,12 @@ fn label_none(language: Language) -> &'static str {
     text(language, "none", "无")
 }
 
-fn label_custom_models(language: Language) -> &'static str {
-    text(language, "custom models", "个自定义模型")
+fn label_pricing_layers_word(language: Language) -> &'static str {
+    text(language, "pricing layers", "个价格层")
+}
+
+fn label_pricing_models_word(language: Language) -> &'static str {
+    text(language, "priced models", "个已定价模型")
 }
 
 fn label_missing(language: Language) -> &'static str {
@@ -1489,7 +2236,7 @@ fn report_data(
     }
 
     let roots = Roots {
-        home: home.unwrap_or(home_dir()?),
+        home: resolve_home(home)?,
     };
     let live = collect_data(filter, &roots)?;
     if !data_file.exists() {
@@ -1510,7 +2257,7 @@ fn run_fetch(
     language: Language,
 ) -> Result<()> {
     let roots = Roots {
-        home: home.unwrap_or(home_dir()?),
+        home: resolve_home(home)?,
     };
     let incoming = collect_data(filter, &roots)?;
     let warnings = incoming.warnings.clone();
@@ -2456,8 +3203,18 @@ fn format_integer_with_commas(value: u64) -> String {
     out.chars().rev().collect()
 }
 
+/// `--home` wins over `$HOME`, and `$HOME` is only required when neither the
+/// flag nor the environment provides one.
+fn resolve_home(home: Option<PathBuf>) -> Result<PathBuf> {
+    match home {
+        Some(home) => Ok(home),
+        None => home_dir(),
+    }
+}
+
 fn home_dir() -> Result<PathBuf> {
     env::var_os("HOME")
+        .filter(|home| !home.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("HOME is not set; pass --home explicitly"))
 }
@@ -2466,17 +3223,61 @@ fn home_dir() -> Result<PathBuf> {
 mod tests {
     use super::{
         apply_date_filter, describe_counts, fit_histogram_label, format_cost, format_dollars,
-        format_number, heatmap_level, histogram_height, localized_warning, max_heatmap_weeks,
-        max_histogram_columns, obsidian_dashboard_markdown_with_home,
-        obsidian_dataview_snapshot_path, source_filter_includes, write_obsidian_dashboard,
-        CivilDate, DataCounts, DateFilter, SourceFilter,
+        format_number, format_path_list, format_pricing_profile, format_unit_price, heatmap_level,
+        histogram_height, localized_warning, max_heatmap_weeks, max_histogram_columns,
+        obsidian_dashboard_markdown_with_home, obsidian_dataview_snapshot_path, resolve_home,
+        source_filter_includes, source_from_filter, write_obsidian_dashboard, CivilDate,
+        DataCounts, DateFilter, SourceFilter,
     };
     use crate::billing::Cost;
     use crate::config::Language;
     use crate::model::{ReportData, SessionMeta, Source, ToolEvent, Usage, UsageEvent};
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn formats_unit_prices_without_trailing_zeroes() {
+        assert_eq!(format_unit_price(5.0), "$5");
+        assert_eq!(format_unit_price(0.075), "$0.075");
+        assert_eq!(format_unit_price(0.003625), "$0.003625");
+        assert_eq!(format_unit_price(0.0), "$0");
+    }
+
+    #[test]
+    fn formats_pricing_profiles_and_extra_files() {
+        assert_eq!(
+            format_pricing_profile(None, Language::En),
+            "builtin (embedded defaults)"
+        );
+        assert_eq!(format_pricing_profile(Some("work"), Language::En), "work");
+        assert_eq!(format_path_list(&[], Language::En), "none");
+        assert_eq!(
+            format_path_list(
+                &[PathBuf::from("a.json"), PathBuf::from("b.json")],
+                Language::En
+            ),
+            "a.json, b.json"
+        );
+    }
+
+    #[test]
+    fn uses_the_explicit_home_without_falling_back_to_the_environment() {
+        // `--home` must win even when HOME is unset, so the lookup cannot be
+        // evaluated eagerly the way `home.unwrap_or(home_dir()?)` would.
+        let resolved = resolve_home(Some(PathBuf::from("/tmp/explicit-home"))).unwrap();
+
+        assert_eq!(resolved, PathBuf::from("/tmp/explicit-home"));
+    }
+
+    #[test]
+    fn maps_source_filters_to_single_sources() {
+        assert_eq!(source_from_filter(SourceFilter::Claude), Source::Claude);
+        assert_eq!(source_from_filter(SourceFilter::Codex), Source::Codex);
+        assert_eq!(source_from_filter(SourceFilter::OpenCode), Source::OpenCode);
+        assert_eq!(source_from_filter(SourceFilter::Pi), Source::Pi);
+        assert_eq!(source_from_filter(SourceFilter::KimiCode), Source::KimiCode);
+    }
 
     #[test]
     fn formats_numbers_with_compact_units() {

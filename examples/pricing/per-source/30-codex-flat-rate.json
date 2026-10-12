@@ -1,0 +1,29 @@
+{
+  "schema": 2,
+  "name": "codex-flat-rate",
+  "description": "Codex usage is covered by a flat-rate plan, so it should not add dollars on top. Models that the plan does not cover are marked unpriced on purpose instead of silently falling back to list prices.",
+  "sources": ["codex"],
+  "models": {
+    "gpt-5.6": {
+      "input": 0.0,
+      "cached_input": 0.0,
+      "output": 0.0,
+      "note": "covered by the flat-rate Codex plan"
+    },
+    "gpt-5.6-terra": {
+      "input": 0.0,
+      "cached_input": 0.0,
+      "output": 0.0,
+      "note": "covered by the flat-rate Codex plan"
+    },
+    "gpt-6*": {
+      "unpriced": true,
+      "note": "not included in the flat-rate plan; keep it out of dollar totals"
+    }
+  },
+  "accounting": {
+    "by_source": {
+      "codex": "cached_input_separate"
+    }
+  }
+}

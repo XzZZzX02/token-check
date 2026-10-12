@@ -1,0 +1,15 @@
+{
+  "schema": 2,
+  "name": "micu-fast",
+  "description": "米醋 API 渠道 fast 档价格，单位 ¥ / 1M tokens，四项都是 standard 档的 2 倍。只覆盖渠道价目表里已经确认的模型，其他模型继续回退到内置价格。",
+  "models": {
+    "gpt-6.1-sol": {
+      "input": 0.8,
+      "cached_input": 0.04,
+      "cache_creation_5m": 1.0,
+      "cache_creation_1h": 1.0,
+      "output": 4.0,
+      "note": "米醋 API fast 档：input ¥0.8 / output ¥4 / cached ¥0.04 / cache write ¥1，每 1M tokens"
+    }
+  }
+}

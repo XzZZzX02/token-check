@@ -4,7 +4,7 @@
 
 - crates.io 包名：`ethan-tkc`
 - 安装后命令：`tkc`、`tokencheck`
-- 当前版本：`1.2.0`
+- 当前版本：`1.3.0`
 - License：MIT
 
 当前版本优先读取本地日志和会话文件，只统计结构化元数据、token usage 和工具名；默认不会展示 prompt、回复正文、shell 命令参数、工具参数或文件快照内容。
@@ -20,6 +20,7 @@
 - [命令参考](#命令参考)
 - [数据与快照](#数据与快照)
 - [计费](#计费)
+- [计费配置](#计费配置)
 - [隐私边界](#隐私边界)
 - [已知限制](#已知限制)
 - [开发](#开发)
@@ -33,6 +34,9 @@
 - 用 `tkc days --chant` 输出 Tokscale 风格终端柱状图。
 - 用 `tkc heatmap` 输出终端周历热力图。
 - 按模型价格估算每日、项目、模型和总美元成本。
+- 计费完全由配置文件驱动：内置价格本身就是 `assets/pricing/*.json` 数据文件，Rust 代码里没有硬编码的模型名或价格表。
+- 支持计费配置（pricing profile）切换，一个配置可以包含多个价格文件，按文件名顺序叠加。
+- 支持把价格限定到指定数据来源，同一个模型在不同来源可以命中不同价格文件、使用不同价格。
 - 支持自定义模型价格文件，覆盖或补充内置价格。
 - 支持 JSON 快照，避免本机日志清理后丢失历史统计。
 - 支持 `all`、`claude`、`codex`、`opencode`、`pi`、`kimi` 六种数据来源过滤。
@@ -154,6 +158,29 @@ tkc fetch --data-file data/workstation.json
 tkc summary --from-json --data-file data/workstation.json
 ```
 
+查看当前生效的计费配置：
+
+```bash
+tkc pricing
+tkc pricing list
+tkc pricing match gpt-5.6
+```
+
+把内置价格落盘成可编辑的计费配置，然后切换过去：
+
+```bash
+tkc pricing init
+tkc pricing use default
+```
+
+临时用另一套价格跑一次报表：
+
+```bash
+tkc pricing use work
+tkc summary --pricing-profile work
+tkc models --pricing-profile personal --pricing-file ~/proxy/claude.json
+```
+
 ## 配置
 
 `tkc config` 会在终端中一步一步询问配置项，并保存为 JSON 配置文件。每一步直接按 Enter 会保留当前显示的值；如果之前没有配置过，则使用内置默认值并保存。
@@ -183,7 +210,11 @@ $XDG_CONFIG_HOME/tokencheck/config.json
 | `language` | `en` | 输出语言。支持 `en` 和 `zh`。 |
 | `source` | `all` | 默认数据来源。支持 `all`、`claude`、`codex`、`opencode`、`pi`、`kimi`。 |
 | `data_file` | `data/tokencheck.json` | 默认快照文件路径，也就是 `fetch` 保存和 `--from-json` 读取的位置。 |
-| `pricing_file` | 无 | 自定义价格 JSON 文件路径。输入 `none`、`null` 或 `-` 可以清空。 |
+| `pricing_profile` | 无 | 默认计费配置名。`builtin` 或留空表示只用内置默认价格。 |
+| `pricing_dir` | 无 | 计费配置目录。未配置时使用 `~/.config/tokencheck/pricing`（受 `XDG_CONFIG_HOME`、`TOKENCHECK_CONFIG` 影响）。 |
+| `pricing_files` | 无 | 额外价格文件列表，按顺序叠加在计费配置之上，后面的文件优先。 |
+| `pricing_file` | 无 | 旧版单一价格文件字段，仍然生效，等价于 `pricing_files` 的第一项。 |
+| `pricing_builtin` | `true` | 是否继续加载内置默认价格。设为 `false` 时只使用计费配置和额外价格文件。 |
 | `obsidian_snapshot_file` | 无 | Obsidian 使用的 JSON 快照路径。`tkc obsidian --fetch` 会写入这个文件；未配置时回退到 `data_file`。 |
 | `obsidian_dashboard_file` | 无 | Obsidian Dashboard Markdown 文件路径。`tkc obsidian` 会创建或覆盖这个文件。 |
 | `limit` | `20` | 默认表格或排行行数。 |
@@ -199,7 +230,10 @@ Press Enter on a blank input to keep and save the shown value.
 Language [en/zh] (current: en):
 Default source [all/claude/codex/opencode/pi/kimi] (current: all):
 Snapshot data file (current: data/tokencheck.json): ~/.tokencheck/usage.json
-Custom pricing file [path/none] (current: none): ~/.tokencheck/pricing.json
+Pricing profile [builtin/default/personal] (current: builtin):
+Pricing profile directory [path/none] (current: none):
+Extra pricing files [path,path/none] (current: none):
+Legacy single pricing file [path/none] (current: none):
 Obsidian snapshot file [path/none] (current: none): /Users/you/Vault/data/tokencheck.json
 Obsidian dashboard file [path/none] (current: none): /Users/you/Vault/2 - Docs/token-check/Token Usage Dashboard.md
 Default row limit (current: 20):
@@ -207,6 +241,8 @@ Default heatmap months (current: 12):
 
 config saved: /Users/you/.config/tokencheck/config.json
 ```
+
+`Pricing profile` 只会列出 `pricing_dir` 里实际存在的配置名；也可以输入 `builtin` 回到内置价格。想切换配置而不进交互界面，用 `tkc pricing use <name>`。
 
 命令行参数会覆盖 `tkc config` 保存的默认值：
 
@@ -326,6 +362,13 @@ JSON 通常作为数据源使用，不需要直接在 Obsidian 中阅读。如�
 | `tkc config` | 交互式配置默认行为 | 设置语言、快照路径、默认来源和默认显示数量 |
 | `tkc config show` | 查看当前生效配置 | 检查配置文件路径和默认值 |
 | `tkc config reset` | 删除配置文件并恢复默认值 | 清空本机自定义配置 |
+| `tkc pricing` | 等价于 `tkc pricing show` | 查看当前生效的价格层和计费口径 |
+| `tkc pricing list` | 列出可用的计费配置 | 看本机有哪些价格文件组合 |
+| `tkc pricing show` | 展示生效的价格文件、优先级和计费口径 | 确认某个模型会命中哪个文件 |
+| `tkc pricing use <name>` | 把某个计费配置写进配置文件 | 一条命令切换计费方案 |
+| `tkc pricing init` | 把内置价格写成可编辑的价格文件 | 在本地改价格、加新模型 |
+| `tkc pricing check [FILE...]` | 校验价格文件 | 检查手写 JSON 是否合法 |
+| `tkc pricing match <MODEL>` | 解释某个模型在各来源命中的价格 | 排查“为什么这个模型是这个价格” |
 | `tkc doctor` | 诊断配置、快照和本机数据目录 | 排查安装后没有数据、路径不对或快照不可读 |
 | `tkc obsidian` | 生成 Obsidian DataviewJS Dashboard | 在 Obsidian 中查看 token 用量报表 |
 | `tkc fetch` | 扫描本机数据并合并写入 JSON 快照 | 保存历史、换机器前备份、日志清理前归档 |
@@ -353,7 +396,10 @@ tkc summary --source codex
 | `--limit <N>` | 配置值，初始为 `20` | 控制排行或日期输出数量。主要影响 `days`、`projects`、`models`、`tools`。 |
 | `--from-json` | 关闭 | 只读取 JSON 快照，不扫描实时本机日志。对 `fetch` 无效。 |
 | `--data-file <PATH>` | 配置值，初始为 `data/tokencheck.json` | 指定 `fetch` 写入或 `--from-json` 读取的快照文件。 |
-| `--pricing-file <PATH>` | 配置值，初始为无 | 指定自定义模型价格 JSON 文件。自定义价格会覆盖同名内置价格。 |
+| `--pricing-profile <NAME>` | 配置值 | 本次运行使用的计费配置名；`builtin` 表示只用内置价格。 |
+| `--pricing-dir <DIR>` | 配置值，初始为 `~/.config/tokencheck/pricing` | 指定计费配置目录。 |
+| `--pricing-file <PATH>` | 配置值，初始为无 | 额外加载一个价格 JSON 文件，可以重复传入，后面的文件覆盖前面的。 |
+| `--no-builtin-pricing` | 关闭 | 不加载内置默认价格，只使用计费配置和额外价格文件。 |
 | `--since <DATE>` | 无 | 只统计该日期及之后的数据。支持 `YYYY-MM-DD`、`today`、`7d`、`30d`。 |
 | `--until <DATE>` | 无 | 只统计该日期及之前的数据。支持 `YYYY-MM-DD`、`today`、`7d`、`30d`。 |
 | `-h`, `--help` | - | 打印命令帮助。 |
@@ -583,6 +629,77 @@ tkc tools --since 2026-05-01
 
 `tools` 不输出 token 或成本，因为工具调用事件本身只记录工具元数据；token 用量来自 usage events。
 
+### `tkc pricing`
+
+`pricing` 用来管理计费来源。不带子命令时等价于 `tkc pricing show`。
+
+```bash
+tkc pricing list
+tkc pricing show
+tkc pricing use personal
+tkc pricing use builtin
+tkc pricing init
+tkc pricing init --force
+tkc pricing check
+tkc pricing check ~/proxy/claude.json
+tkc pricing match gpt-5.6
+tkc pricing match gpt-6-astra --source codex
+```
+
+`tkc pricing show` 输出示例：
+
+```text
+tokencheck pricing
+Pricing directory: /Users/you/.config/tokencheck/pricing
+Active profile: personal
+Embedded defaults: enabled
+Priced model entries: 127 entries
+
+Active pricing layers, lowest precedence first:
+#  source  models  file
+-  ------  ------  ----------------------------------------------------------
+1  all     0       defaults
+2  all     41      openai
+...
+8  all     1       /Users/you/.config/tokencheck/pricing/personal/10-official.json
+9  claude  2       /Users/you/.config/tokencheck/pricing/personal/20-claude-proxy.json
+10 codex   2       /Users/you/.config/tokencheck/pricing/personal/30-codex-flat.json
+
+Accounting:
+source                              mode
+----------------------------------  ---------------------
+all                                 cached_input_separate
+codex                               cached_input_separate
+legacy single-event Codex sessions  cached_input_subset
+```
+
+`tkc pricing match <MODEL>` 会逐个来源列出命中的价格条目和所在文件，是排查“同一个模型为什么两个来源价格不同”的最快方式：
+
+```text
+Pricing match
+model: gpt-5.6
+Active profile: personal
+
+source    matched key  input  cached  output  file
+--------  -----------  -----  ------  ------  --------------------------------------------------
+claude    gpt-5.6      $6     $0.6    $30     .../personal/20-claude-proxy.json
+codex     gpt-5.6      $0      $0      $0      .../personal/30-codex-flat.json
+opencode  gpt-5.6      $4     $0.4    $20     .../personal/10-official.json
+pi        gpt-5.6      $4     $0.4    $20     .../personal/10-official.json
+kimi      gpt-5.6      $4     $0.4    $20     .../personal/10-official.json
+```
+
+子命令说明：
+
+| 子命令 | 作用 |
+| --- | --- |
+| `list` | 列出 `pricing_dir` 里的计费配置和内置配置，并标出当前生效项。计费配置可以是 `<name>.json` 文件，也可以是 `<name>/` 目录。 |
+| `show` | 展示真正加载的价格层、加载顺序、每层模型数、计费口径和额外价格文件。 |
+| `use <name>` | 校验配置存在后写入配置文件；`tkc pricing use builtin` 回到内置价格。 |
+| `init` | 把内置的 `assets/pricing/*.json` 复制到 `<pricing_dir>/default/`，之后可以直接编辑。已存在的文件默认跳过，`--force` 覆盖。 |
+| `check [FILE...]` | 解析并校验价格文件；不传文件时校验当前生效配置里的全部文件。校验失败会以非 0 退出码结束。 |
+| `match <MODEL>` | 按来源列出命中的价格条目、单价和来源文件；`--source` 可以只看一个来源。 |
+
 ### `tkc doctor`
 
 `doctor` 会检查当前环境是否能正常产出报表。它不会写入快照，也不会修改配置。
@@ -594,7 +711,8 @@ tkc doctor --source pi
 tkc doctor --source kimi
 tkc doctor --home /Users/yourname
 tkc doctor --data-file data/workstation.json
-tkc doctor --pricing-file ~/.tokencheck/pricing.json
+tkc doctor --pricing-profile personal
+tkc doctor --pricing-file ~/proxy/claude.json
 ```
 
 诊断项包括：
@@ -604,7 +722,9 @@ tkc doctor --pricing-file ~/.tokencheck/pricing.json
 | `Config file` | 当前配置文件路径是否存在；不存在时会使用内置默认值。 |
 | `Home directory` | 实时扫描使用的 home 目录是否存在。 |
 | `Source filter` | 当前生效的数据来源过滤：`all`、`claude`、`codex`、`opencode`、`pi` 或 `kimi`。 |
-| `Custom pricing file` | 自定义价格文件是否存在且能解析；未配置时使用内置价格。 |
+| `Active profile` | 当前生效的计费配置名和计费配置目录。 |
+| `Pricing files` | 实际加载了多少价格层、覆盖多少个模型、默认计费口径是什么；有文件解析失败时这里会报错。 |
+| `Extra pricing files` | 通过 `pricing_files` 或 `--pricing-file` 指定的额外价格文件是否存在。 |
 | `Claude Code data directory` | 是否能找到 `$HOME/.claude/projects`。 |
 | `Codex data directory` | 是否能找到 `$HOME/.codex/sessions`。 |
 | `OpenCode data directory` | 是否能找到 `$HOME/.local/share/opencode`。 |
@@ -737,52 +857,237 @@ Kimi Code：
 ## 计费
 
 - `summary`、`days`、`projects` 和 `models` 会输出 `cost`，单位是美元。
-- Codex 数据里的 cached input 视为 input 的子集，不重复计入普通 input。
+- 所有价格都来自价格文件：内置默认价格是 `assets/pricing/*.json`，用户价格文件是同一套 schema。Rust 代码里没有模型名和价格表。
+- Codex 数据里的 cached input 默认视为 input 的子集（旧版单事件会话），其他情况按独立字段计费。这个口径也写在价格文件里。
 - Claude Code 数据里的 cache read/cache write 按独立字段计费。
 - Claude 模型按 input、cache read、5 分钟 cache write、1 小时 cache write 和 output 分别计费。
 - 其他文本模型按 input、cached input/cache hit 和 output 估算。
-- 当前内置价格覆盖常见 OpenAI GPT/o 系列、Claude Opus/Sonnet/Haiku、Gemini 3/2.5/2.0、DeepSeek V4、MiMo V2/V2.5、Kimi K2/Moonshot V1 官方模型名和常见 snapshot 名。
-- 如果设置了自定义价格文件，同名自定义价格会优先于内置价格。
-- 如果模型没有内置价格，也没有自定义价格，成本显示会带 `*`，并在 warning 中说明该模型未计入美元总额。
+- 内置价格覆盖 OpenAI GPT-5.6（`gpt-5.6` / `gpt-5.6-sol` / `-terra` / `-luna` / `-cyber`）、GPT-6（`gpt-6-astra` / `gpt-6.1-sol` / `gpt-6-sol` / `gpt-6-luna`）、GPT-5.x / GPT-4.x / o 系列，Claude Opus 5.5 / 5 / 4.x、Sonnet 5.5 / 5 / 4.x、Haiku 5.5 / 4.5 / 3.x、Fable 5.1 / Mythos 5.1，Gemini 3.8 / 3.7 / 3.6 / 3.5 / 3.1 / 3 / 2.5 / 2.0，DeepSeek V4-Pro / Flash、MiMo V2.6 / V2.5、Kimi K3 / K2.x 和 Moonshot V1。
+- 只要上层价格文件覆盖了同名模型，就会优先于下层；没有价格时成本显示带 `*`，并在 warning 中说明该模型未计入美元总额。
 - 成本只按文本 token 估算，不包含订阅费、Batch/Flex/Priority 折扣、工具调用附加费、图片/音频/视频单独计费、税费或第三方代理加价。
 
-### 自定义模型价格
+### 价格解析顺序
 
-自定义价格文件是一个 JSON 文件，单位是每 100 万 token 的美元价格。最小格式如下：
+一次运行实际加载的价格层按优先级从低到高是：
+
+1. `assets/pricing/*.json` 内置默认价格，除非显式使用 `--no-builtin-pricing` 或把 `pricing_builtin` 设为 `false`。
+2. 当前计费配置里的价格文件：`<pricing_dir>/<profile>.json`，或者 `<pricing_dir>/<profile>/` 目录下的 `*.json`（按文件名排序）。
+3. 配置文件里的 `pricing_file`、`pricing_files`，以及命令行的 `--pricing-file`，按这个顺序追加。
+
+查找某个事件的价格时，从最高优先级往下找，第一个命中的规则生效。同一层内部：
+
+- 精确模型名优先于带 `*` 的通配前缀；通配前缀越长越优先；带 `-2026...` 这类日期后缀的 snapshot 名会回退到基础模型名。
+- 对同一个模型名，声明了 `sources` 的条目优先于没有 `sources` 的通用条目；如果该条目只声明了别的来源，就继续往下找。
+- `"unpriced": true` 会明确把模型标为未定价，并阻止继续回退到更低优先级的价格。
+
+## 计费配置
+
+计费配置（pricing profile）就是一组价格文件的命名组合。它解决两个问题：不同套餐要切换整套价格，以及同一个模型在不同来源要按不同价格计费。
+
+### 配置文件和计费配置从哪里读
+
+二进制本身不依赖任何外部价格文件：内置价格通过 `include_str!` 编译进可执行文件，把 `tkc` 拷到任何机器上都能直接按内置价格算成本。
+
+配置文件位置按这个顺序确定（第一个命中的生效）：
+
+1. `$TOKENCHECK_CONFIG`：直接指定 `config.json` 的完整路径。
+2. `$XDG_CONFIG_HOME/tokencheck/config.json`。
+3. `$HOME/.config/tokencheck/config.json`。
+4. 都不存在：不读配置，全部使用内置默认值。
+
+计费配置目录按这个顺序确定：
+
+1. `--pricing-dir <DIR>`。
+2. 配置文件里的 `pricing_dir`。
+3. 配置文件所在目录下的 `pricing/`，也就是默认的 `~/.config/tokencheck/pricing`。
+4. 上面都拿不到（没有 `HOME`、`XDG_CONFIG_HOME`、`TOKENCHECK_CONFIG`，也没传 `--pricing-dir`）：没有计费配置目录，只用内置价格，`tkc pricing show` 会显示 `Pricing directory: none`。
+
+需要注意：
+
+- `--home` 只决定扫描哪个目录下的 Claude Code / Codex 等日志，不影响配置文件、计费配置目录和价格文件的查找。
+- 配置文件里的相对路径（`pricing_dir`、`pricing_files`、`pricing_file`）按运行 `tkc` 时的当前目录解析，和 `--pricing-file` 的语义一致；`~` 会展开为 `$HOME`。`tkc pricing show` 打印的是解析后的结果，可以直接确认。
+- 在 launchd、cron、容器里 `HOME` 经常没有设置。这时报表命令照常可用（走内置价格），但要用 profile 就需要设置 `HOME`、`XDG_CONFIG_HOME`、`TOKENCHECK_CONFIG` 之一，或者显式传 `--pricing-dir`。
+- 把整个配置目录搬到别处（例如 U 盘）时，用绝对路径或 `TOKENCHECK_CONFIG` 指向新的 `config.json`，相对路径不会跟着配置文件走。
+
+### 目录结构
+
+计费配置默认放在 `~/.config/tokencheck/pricing`。一个配置可以是单个 JSON 文件，也可以是一个目录：
+
+```text
+~/.config/tokencheck/pricing/
+├── default/                  # 配置名 default：目录里的文件按文件名排序叠加
+│   ├── 00-defaults.json
+│   ├── 10-openai.json
+│   └── 20-anthropic.json
+├── personal/
+│   ├── 10-official.json      # 官方价格
+│   ├── 20-claude-proxy.json  # 只对 claude 来源生效的网关加价
+│   └── 30-codex-flat.json    # 只对 codex 来源生效的包月价
+└── team.json                 # 配置名 team：单个文件
+```
+
+对应的切换方式：
+
+```bash
+tkc pricing list          # 看到 builtin、default、personal、team
+tkc pricing use personal  # 写进配置文件，之后所有命令都用它
+tkc summary --pricing-profile team   # 只对本次运行生效
+```
+
+### 同一个模型，不同来源不同价格
+
+价格文件顶层和模型条目都支持 `sources` / `source`。这样同一个模型可以出现在多个文件里，各自负责一部分来源：
+
+`20-claude-proxy.json`：
 
 ```json
 {
+  "schema": 2,
+  "name": "claude-gateway",
+  "sources": ["claude"],
+  "models": {
+    "gpt-5.6": { "input": 6.0, "cached_input": 0.6, "output": 30.0 },
+    "gpt-6-astra": { "input": 15.0, "cached_input": 1.5, "output": 75.0 }
+  }
+}
+```
+
+`30-codex-flat.json`：
+
+```json
+{
+  "schema": 2,
+  "name": "codex-subscription",
+  "sources": ["codex"],
+  "models": {
+    "gpt-5.6": { "input": 0.0, "cached_input": 0.0, "output": 0.0 },
+    "gpt-6*": { "unpriced": true }
+  }
+}
+```
+
+结果就是 `gpt-5.6` 在 `claude` 来源走网关价、在 `codex` 来源记 0、在 `opencode` / `pi` / `kimi` 来源继续回退到官方价；`gpt-6*` 在 codex 来源被明确标为未定价，不会静默套用官方价。可以用 `tkc pricing match gpt-5.6` 验证。
+
+仓库里的 `examples/pricing/per-source/` 就是这套例子，可以直接拷到 `~/.config/tokencheck/pricing/personal/`。
+
+反过来，如果同一个模型只是因为**渠道档位**不同而价格不同（例如某个渠道的 standard 档和 fast 档差一倍），更适合按档位拆成两个配置，切换而不是叠加：
+
+```text
+~/.config/tokencheck/pricing/
+├── micu-standard.json   # tkc pricing use micu-standard
+└── micu-fast.json       # tkc pricing use micu-fast
+```
+
+`examples/pricing/` 里已经带了这两个配置，可以直接拷走。
+
+### 价格文件格式
+
+完整字段如下，`schema: 2` 是当前版本，`schema: 1` 和省略 `schema` 的老格式（只有 `models`）继续兼容。
+
+```json
+{
+  "schema": 2,
+  "name": "personal",
+  "description": "自用价格",
+  "sources": ["claude", "codex"],
+  "accounting": {
+    "default": "cached_input_separate",
+    "by_source": { "codex": "cached_input_subset" },
+    "legacy_codex_event_subset": true
+  },
   "models": {
     "my-proxy-model": {
       "input": 2.0,
       "cached_input": 0.5,
       "cache_creation_5m": 3.0,
       "cache_creation_1h": 4.0,
-      "output": 8.0
-    }
+      "output": 8.0,
+      "note": "网关报价，月结"
+    },
+    "tiered-model": {
+      "input": 2.0,
+      "cached_input": 0.2,
+      "output": 12.0,
+      "tiers": [
+        { "prompt_tokens_over": 200000, "input": 4.0, "cached_input": 0.4, "output": 18.0 }
+      ]
+    },
+    "shared-model": [
+      { "source": "claude", "input": 10.0, "output": 20.0 },
+      { "source": "codex", "input": 1.0, "output": 2.0 }
+    ],
+    "blocked-model": { "unpriced": true }
   }
 }
 ```
 
-字段说明：
-
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `input` | 是 | 普通 input token 单价。 |
-| `output` | 是 | output token 单价。 |
+| `schema` | 否 | 价格文件版本；当前为 `2`，`1` 和省略都按老格式解析。 |
+| `name` / `description` | 否 | 展示用的名字和说明，会出现在 `tkc pricing show`。 |
+| `sources` | 否 | 文件级来源限定。写了以后，文件内没有自己声明来源的条目只对这个来源生效。 |
+| `accounting` | 否 | 计费口径，见下一节。多层会合并，高优先级覆盖低优先级。 |
+| `models` | 是 | 模型到价格的映射。键可以是精确模型名，也可以以 `*` 结尾做前缀匹配。 |
+| `sources` / `source` | 否 | 条目级来源限定：只对列出的来源（`claude`、`codex`、`opencode`、`pi`、`kimi`）生效。 |
+| `input` | 是（除非 `unpriced`） | 普通 input token 单价。 |
+| `output` | 是（除非 `unpriced`） | output token 单价。 |
 | `cached_input` | 否 | cached input/cache read 单价；省略时等于 `input`。 |
-| `cache_creation_5m` | 否 | Claude 5 分钟 cache write 单价；省略时为 `0`。 |
-| `cache_creation_1h` | 否 | Claude 1 小时 cache write 单价；省略时为 `0`。 |
+| `cache_creation_5m` | 否 | 5 分钟 cache write 单价；省略时为 `0`。别名：`cache_creation_input_5m`、`cache_write_5m`。 |
+| `cache_creation_1h` | 否 | 1 小时 cache write 单价；省略时为 `0`。别名：`cache_creation_input_1h`、`cache_write_1h`。 |
+| `tiers` | 否 | 按 prompt token 分档；`prompt_tokens_over` 之上的请求使用这一档价格，未写的字段沿用基础单价。 |
+| `note` | 否 | 备注，会出现在 `tkc pricing match` 里，适合标注“促销价”“估算值”“网关加价”。 |
+| `unpriced` | 否 | 设为 `true` 表示这个模型（或这个来源）明确不参与美元统计，并阻止回退到低优先级价格。 |
 
-配置方式：
+模型名规范化规则：大小写不敏感，`_` 会当成 `-`，`provider/model` 会按最后一段模型名匹配。因此 `openai/gpt-4.1-mini`、`OpenAI/GPT_4.1_Mini` 和 `gpt-4.1-mini` 会命中同一条价格。`unknown` 和 `<synthetic>` 永远不会被定价。
+
+### 计费口径（accounting）
+
+不同工具对 cached input 的记账方式不同，所以 `accounting` 也是配置项：
+
+| 值 | 含义 |
+| --- | --- |
+| `cached_input_separate` | cached input 是独立计数，和普通 input 分开计费（默认）。 |
+| `cached_input_subset` | cached input 已经包含在普通 input 计数里，计费时先从 input 里减掉，避免重复计费。 |
+
+- `default`：没有来源级覆盖时使用的口径。
+- `by_source`：按来源覆盖，键是 `claude`、`codex`、`opencode`、`pi`、`kimi`。
+- `legacy_codex_event_subset`：默认 `true`。旧版 Codex 会话只会写一条累计事件（`event_id == session_id`），这种事件按 `cached_input_subset` 计费。
+
+### 常用命令
 
 ```bash
-tkc config
-tkc summary --pricing-file ~/.tokencheck/pricing.json
-tkc models --pricing-file ~/.tokencheck/pricing.json
+# 把内置价格落盘成可编辑的 default 配置
+tkc pricing init
+
+# 看看某个模型会命中哪一层、什么价格
+tkc pricing match gpt-5.6
+tkc pricing match claude-opus-5.5 --source claude
+
+# 一个渠道按档位拆成两个配置，按当天走的档位切换
+tkc pricing list
+tkc pricing use micu-standard
+tkc pricing use micu-fast
+tkc models --pricing-profile micu-fast
+
+# 校验手写的价格文件
+tkc pricing check ~/proxy/claude.json
+
+# 临时只用自己的价格，不回退到内置价格
+tkc summary --no-builtin-pricing --pricing-profile personal
+
+# 临时叠加两个价格文件，后面的覆盖前面的
+tkc models --pricing-file a.json --pricing-file b.json
 ```
 
-模型名会按和内置价格相同的规则规范化：大小写不敏感，`_` 会当成 `-`，`provider/model` 会按最后一段模型名匹配。因此 `openai/gpt-4.1-mini` 和 `gpt-4.1-mini` 会匹配同一条价格。自定义价格会覆盖同名内置价格。
+### 价格数据说明
+
+内置价格来自各厂商官方定价页，`note` 字段里标注了促销价和估算值：
+
+- OpenAI GPT-5.6 系列的 `gpt-5.6` 是 `gpt-5.6-sol` 的别名；这一代用 Sol/Terra/Luna/Cyber 命名，不存在 `gpt-5.6-mini` / `-nano` / `-pro` / `-codex`。`gpt-6` 在官方目录里没有独立条目，这里按该系列的 sol 档（`gpt-6-sol`）定价，并在 `note` 里说明，方便你按自己供应商的实际映射覆盖。
+- GPT-5.6 / GPT-6 的 prompt 超过 272k token 时进入高档位（input ×2、output ×1.5），这个规则写在对应模型的 `tiers` 里。
+- `gpt-5.6-sol` 的 4/0.4/20 是官方标注的促销价（至少到 2026-11-21）；Gemini 3.8 / 3.6 Flash 的 0.75/0.075/3.75 也是促销价，官方说明 2027-01-01 起翻倍。价格变化时直接改 `assets/pricing/*.json` 或自己的配置目录即可，不需要改代码。
+- DeepSeek 区分高峰和低谷价，内置价格用的是高峰价；低谷价是高峰价的一半。usage 日志只有日期没有小时，所以要按低谷价统计就复制 `40-deepseek.json`、把价格减半，作为更高优先级的配置加载。
+- MiMo 的内置价格已按小米官方页面更新为 V2.5/V2.6 系列（`MiMo-V2.6-Pro` 0.435/0.0036/0.87、`MiMo-V2.6-Flash` 0.14/0.0028/0.28）。1.3.0 之前的版本这两个系列的价格是错的，升级后成本数字会变化。
 
 ## 隐私边界
 
@@ -799,9 +1104,11 @@ tkc models --pricing-file ~/.tokencheck/pricing.json
 
 ## 已知限制
 
-- 模型价格是内置静态配置，供应商价格变化后需要更新代码。
 - 成本是按文本 token 的估算值，不等同于实际账单。
-- 第三方代理模型名可能不等同于官方模型名，只能按已知别名匹配。
+- 内置价格是随包发布的静态数据，厂商调价后需要更新价格文件（`assets/pricing/*.json` 或本地计费配置），不需要改代码。
+- 价格文件按“生效中的价格”工作，不记录生效日期；促销价到期需要自己改 `assets/pricing/*.json` 或覆盖配置，`note` 字段里标了已知的到期时间。
+- 第三方代理模型名可能不等同于官方模型名；不确定时用 `tkc pricing match <model>` 看命中了哪条价格，再在配置里显式覆盖。
+- 来源级价格只按数据来源（`claude`、`codex`、`opencode`、`pi`、`kimi`）区分，不区分同一来源内的多个账号或网关地址。
 - `heatmap` 只展示 token 强度，不展示成本。
 
 ## 开发
@@ -809,8 +1116,11 @@ tkc models --pricing-file ~/.tokencheck/pricing.json
 ### 项目结构
 
 ```text
+assets/
+└── pricing/         # 内置价格数据文件，运行时通过 include_str! 加载
 src/
-├── billing.rs       # 模型价格匹配、cache 计费口径、成本估算
+├── billing.rs       # 价格文件解析、匹配、计费口径、成本估算
+├── pricing.rs       # 计费配置发现、目录/文件解析、优先级合并
 ├── claude_code/     # Claude Code JSONL 数据读取
 ├── codex/           # Codex sessions JSONL 数据读取
 ├── opencode/        # OpenCode SQLite 与 JSON 数据读取
@@ -822,9 +1132,11 @@ src/
 └── bin/
     ├── tkc.rs
     └── tokencheck.rs
+examples/
+└── pricing/         # 可直接拷走的计费配置示例
 ```
 
-核心数据流是：读取本机日志或 JSON 快照，归一化为 `ReportData`，按命令维度聚合，再输出表格、柱状图、热力图或成本估算。
+核心数据流是：读取本机日志或 JSON 快照，归一化为 `ReportData`，按命令维度聚合，再输出表格、柱状图、热力图或成本估算。计费侧的流程是：计费配置目录 → 选中的价格文件 + 额外文件 → 叠加到内置价格之上 → 按 `(source, model)` 查找价格。
 
 ### 开发验证
 
@@ -846,6 +1158,9 @@ cargo run --bin tkc -- heatmap --from-json --months 12
 cargo run --bin tkc -- projects --limit 5
 cargo run --bin tkc -- models --limit 5
 cargo run --bin tkc -- tools --limit 5
+cargo run --bin tkc -- pricing list
+cargo run --bin tkc -- pricing show
+cargo run --bin tkc -- pricing match gpt-5.6
 ```
 
 ## 发布
@@ -856,6 +1171,48 @@ cargo run --bin tkc -- tools --limit 5
 .github/workflows/cargo-publish.yml  # 发布 crates.io 包
 .github/workflows/release.yml        # 构建并发布 GitHub Release 二进制包
 ```
+
+### 本地构建可分发二进制
+
+`release` profile 打开了 LTO 并去掉了调试符号，产物可以直接拷到别的机器上运行，不需要装 Rust 或任何第三方动态库：
+
+```bash
+cargo build --locked --release --bins
+ls -l target/release/tkc target/release/tokencheck
+```
+
+指定目标平台进行交叉构建（和 CI 的命名保持一致）：
+
+```bash
+cargo build --locked --release --bins --target aarch64-apple-darwin
+cargo build --locked --release --bins --target x86_64-apple-darwin
+```
+
+macOS 上可以把两个架构合成通用二进制，再打成和 GitHub Release 同名的压缩包：
+
+```bash
+mkdir -p dist/universal
+for bin in tkc tokencheck; do
+  lipo -create "target/aarch64-apple-darwin/release/$bin" \
+              "target/x86_64-apple-darwin/release/$bin" \
+              -output "dist/universal/$bin"
+  codesign --force --sign - "dist/universal/$bin"
+done
+
+name="tokencheck-v$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys;print(json.load(sys.stdin)["packages"][0]["version"])')-macos-universal"
+mkdir -p "dist/$name"
+cp dist/universal/tkc dist/universal/tokencheck README.md LICENSE "dist/$name/"
+tar -czf "dist/$name.tar.gz" -C dist "$name"
+shasum -a 256 dist/*.tar.gz > dist/SHA256SUMS
+```
+
+要点：
+
+- `rusqlite` 用了 `bundled` feature，SQLite 会静态编译进二进制，所以产物没有额外的动态库依赖；`otool -L` 只会看到 `libSystem`、`libiconv` 和 `CoreFoundation` 这些系统库。
+- 二进制的 macOS 最低版本是 arm64 的 11.0 和 x86_64 的 10.12，都是各架构的下限。
+- 用 `lipo` 合并后要重新 `codesign --force --sign -` 做 ad-hoc 签名，否则签名失效。
+- 从网上下载的二进制会被 Gatekeeper 打上隔离属性，用户首次运行需要 `xattr -d com.apple.quarantine tkc`，或右键打开；要彻底避免需要 Apple 开发者证书签名并公证。
+- Linux 和 Windows 目标（`x86_64-unknown-linux-gnu`、`x86_64-pc-windows-msvc`）由 `.github/workflows/release.yml` 在推 tag 时构建。
 
 ### crates.io 发布
 

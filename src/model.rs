@@ -14,6 +14,14 @@ pub enum Source {
 }
 
 impl Source {
+    pub const ALL: [Source; 5] = [
+        Source::Claude,
+        Source::Codex,
+        Source::OpenCode,
+        Source::Pi,
+        Source::KimiCode,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             Source::Claude => "claude",
@@ -21,6 +29,17 @@ impl Source {
             Source::OpenCode => "opencode",
             Source::Pi => "pi",
             Source::KimiCode => "kimi",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "claude" | "claude-code" | "claudecode" | "c" => Some(Source::Claude),
+            "codex" | "x" => Some(Source::Codex),
+            "opencode" | "open-code" | "oc" => Some(Source::OpenCode),
+            "pi" => Some(Source::Pi),
+            "kimi" | "kimi-code" | "kimicode" | "kc" => Some(Source::KimiCode),
+            _ => None,
         }
     }
 }
@@ -162,6 +181,22 @@ mod tests {
         // Then
         assert_eq!(label, "pi");
         assert_eq!(serialized, r#""pi""#);
+    }
+
+    #[test]
+    fn parses_source_aliases_used_by_pricing_files() {
+        assert_eq!(Source::parse("codex"), Some(Source::Codex));
+        assert_eq!(Source::parse(" OpenCode "), Some(Source::OpenCode));
+        assert_eq!(Source::parse("kimi-code"), Some(Source::KimiCode));
+        assert_eq!(Source::parse("pi"), Some(Source::Pi));
+        assert_eq!(Source::parse("claude"), Some(Source::Claude));
+        assert_eq!(Source::parse("unknown"), None);
+    }
+
+    #[test]
+    fn exposes_every_source_for_pricing_scopes() {
+        assert_eq!(Source::ALL.len(), 5);
+        assert!(Source::ALL.contains(&Source::KimiCode));
     }
 
     #[test]

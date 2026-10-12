@@ -1,0 +1,15 @@
+{
+  "schema": 2,
+  "name": "micu-standard",
+  "description": "米醋 API 渠道 standard 档价格，单位 ¥ / 1M tokens。只覆盖渠道价目表里已经确认的模型，其他模型继续回退到内置价格。",
+  "models": {
+    "gpt-6.1-sol": {
+      "input": 0.4,
+      "cached_input": 0.02,
+      "cache_creation_5m": 0.5,
+      "cache_creation_1h": 0.5,
+      "output": 2.0,
+      "note": "米醋 API standard 档：input ¥0.4 / output ¥2 / cached ¥0.02 / cache write ¥0.5，每 1M tokens"
+    }
+  }
+}

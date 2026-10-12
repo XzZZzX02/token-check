@@ -1,0 +1,43 @@
+{
+  "schema": 2,
+  "name": "deepseek",
+  "description": "DeepSeek list prices in USD per 1M tokens at the PEAK (standard) rate. DeepSeek halves every price during off-peak hours (01:00-04:00 and 06:00-10:00 UTC on weekdays, excluding CN holidays); usage logs only carry a date, so switching to off-peak prices is a pricing-profile decision. Copy this file, halve the numbers, and load it as an override profile if your traffic is off-peak.",
+  "models": {
+    "deepseek-v4-pro": {
+      "input": 1.32,
+      "cached_input": 0.044,
+      "output": 3.96,
+      "note": "peak rate; off-peak is 0.66 / 0.022 / 1.98"
+    },
+    "deepseek-flash": {
+      "input": 0.3,
+      "cached_input": 0.006,
+      "output": 1.2,
+      "note": "peak rate; off-peak is 0.15 / 0.003 / 0.60"
+    },
+    "deepseek-v4-flash": {
+      "input": 0.3,
+      "cached_input": 0.006,
+      "output": 1.2,
+      "note": "retired id, served by DeepSeek-V4.1-Flash at the Flash price"
+    },
+    "deepseek-v4-flash-vision-exp": {
+      "input": 0.3,
+      "cached_input": 0.006,
+      "output": 1.2,
+      "note": "retired id, served by DeepSeek-V4.1-Flash at the Flash price"
+    },
+    "deepseek-chat": {
+      "input": 0.3,
+      "cached_input": 0.006,
+      "output": 1.2,
+      "note": "non-thinking alias of the Flash tier"
+    },
+    "deepseek-reasoner": {
+      "input": 0.3,
+      "cached_input": 0.006,
+      "output": 1.2,
+      "note": "thinking alias of the Flash tier"
+    }
+  }
+}
